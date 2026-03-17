@@ -5,20 +5,22 @@ import geopandas as gpd
 import fiona
 from shapely.ops import nearest_points
 from shapely.geometry import Point
+from geopy.distance import geodesic
 
-# Configuração e Suporte KML
+# Habilitar KML
 fiona.drvsupport.supported_drivers['KML'] = 'rw'
+
 st.set_page_config(page_title="Monitoramento BR-153/PR", layout="wide")
 
-st.title("Sistema de Consulta - BR-153/PR")
+st.title("Sistema de Consulta Geográfica - BR-153/PR")
 
 # --- FUNÇÃO DE CARREGAMENTO ---
 @st.cache_data
 def load_data(file):
     try:
-        return gpd.read_file(file, driver='KML')
+        df = gpd.read_file(file, driver='KML')
+        return df
     except Exception as e:
-        st.error(f"Erro ao carregar {file}: {e}")
         return None
 
 # Carregamento das bases
@@ -26,57 +28,71 @@ df_pontes = load_data("pontes.kml")
 df_rodovia = load_data("rodovia.kml")
 df_pol = load_data("poligonos_mun_conex.kml")
 
-# --- BARRA LATERAL (CONSULTA) ---
-st.sidebar.header("📍 Consulta de Coordenadas")
-lat_input = st.sidebar.number_input("Latitude (ex: -23.5)", format="%.6f", value=-23.000000)
-lon_input = st.sidebar.number_input("Longitude (ex: -50.2)", format="%.6f", value=-50.000000)
+# --- LÓGICA DE CONSULTA ---
+st.sidebar.header("📍 Localizar OAE mais próxima")
+lat_input = st.sidebar.number_input("Digite a Latitude", format="%.6f", value=-23.5000)
+lon_input = st.sidebar.number_input("Digite a Longitude", format="%.6f", value=-50.5000)
 
-ponto_usuario = Point(lon_input, lat_input)
-
-if st.sidebar.button("Calcular OAE mais próxima"):
+if st.sidebar.button("Calcular Distância"):
     if df_pontes is not None:
-        # Encontrar ponto mais próximo
+        ponto_usuario = Point(lon_input, lat_input)
+        
+        # Encontrar a geometria mais próxima
         pts_geoms = df_pontes.geometry.unary_union
-        nearest_geoms = nearest_points(ponto_usuario, pts_geoms)
-        distancia = nearest_geoms[0].distance(nearest_geoms[1]) * 111.139 # Conversão aproximada para km
+        ponto_proximo_geom = nearest_points(ponto_usuario, pts_geoms)[1]
         
-        # Identificar qual ponte é
-        ponte_proxima = df_pontes.iloc[df_pontes.geometry.distance(ponto_usuario).idxmin()]
+        # Calcular distância real (Haversine) em km
+        coord_usuario = (lat_input, lon_input)
+        coord_ponte = (ponto_proximo_geom.y, ponto_proximo_geom.x)
+        distancia_km = geodesic(coord_usuario, coord_ponte).kilometers
         
-        st.sidebar.success(f"**OAE Próxima:** {ponte_proxima['name']}")
-        st.sidebar.info(f"**Distância:** {distancia:.2f} km")
+        # Localizar a linha correspondente no dataframe
+        idx_proximo = df_pontes.geometry.distance(ponto_usuario).idxmin()
+        ponte_dados = df_pontes.iloc[idx_proximo]
+        
+        # Tentar identificar o nome da ponte (várias possibilidades de colunas)
+        nome_oae = "Não identificado"
+        for col in ['name', 'Name', 'ID_N_S_OAE', 'ID']:
+            if col in ponte_dados and ponte_dados[col]:
+                nome_oae = ponte_dados[col]
+                break
+        
+        st.sidebar.success(f"**OAE Próxima:** {nome_oae}")
+        st.sidebar.info(f"**Distância:** {distancia_km:.3f} km")
+        
+        # Atualizar centro do mapa para o resultado
+        map_center = [lat_input, lon_input]
     else:
-        st.sidebar.error("Base de pontes não carregada.")
+        st.sidebar.error("Base de dados de pontes não carregada.")
+        map_center = [-24.0, -50.5]
+else:
+    map_center = [-24.0, -50.5]
 
-# --- MAPA ---
-m = folium.Map(location=[lat_input, lon_input], zoom_start=8)
+# --- MAPA INTERATIVO ---
+m = folium.Map(location=map_center, zoom_start=9)
 
-# Adicionar ponto da consulta no mapa
-folium.Marker([lat_input, lon_input], tooltip="Sua Consulta", icon=folium.Icon(color='red', icon='screenshot')).add_to(m)
+# Adicionar Marcador do Usuário
+folium.Marker([lat_input, lon_input], tooltip="Sua Posição", icon=folium.Icon(color='red')).add_to(m)
 
+# Camadas KML
 if df_rodovia is not None:
-    folium.GeoJson(df_rodovia, name="Rodovia", style_function=lambda x: {'color': 'orange'}).add_to(m)
+    folium.GeoJson(df_rodovia, name="Rodovia BR-153", style_function=lambda x: {'color': 'black', 'weight': 2}).add_to(m)
+
+if df_pol is not None:
+    folium.GeoJson(df_pol, name="Municípios", style_function=lambda x: {'fillColor': 'green', 'fillOpacity': 0.1, 'weight': 1}).add_to(m)
 
 if df_pontes is not None:
     for _, row in df_pontes.iterrows():
         folium.CircleMarker(
             location=[row.geometry.y, row.geometry.x],
-            radius=5,
-            popup=f"OAE: {row['name']}",
+            radius=4,
             color="blue",
-            fill=True
+            popup=f"OAE: {row.get('Name', row.get('name', 'Ponte'))}"
         ).add_to(m)
 
-# Renderizar Mapa
-st_folium(m, width=1000, height=500)
+st_folium(m, width=1100, height=550)
 
-# --- TABELA DE DADOS (CORREÇÃO DO ERRO) ---
-st.subheader("Dados das OAEs (Pontes)")
-if df_pontes is not None:
-    # Removemos a coluna geometry apenas para exibição na tabela
-    display_df = df_pontes.copy()
-    if 'geometry' in display_df.columns:
-        display_df = display_df.drop(columns=['geometry'])
-    st.dataframe(display_df)
-else:
-    st.warning("Dados das pontes indisponíveis para exibição.")
+# --- TABELA DE DADOS ---
+with st.expander("Ver base de dados completa (OAEs)"):
+    if df_pontes is not None:
+        st.dataframe(df_pontes.drop(columns='geometry', errors='ignore'))
