@@ -4,6 +4,10 @@ from streamlit_folium import st_folium
 import geopandas as gpd
 import fiona
 
+# ADICIONE ISSO NO TOPO: Habilita suporte a KML explicitamente
+fiona.drvsupport.supported_drivers['KML'] = 'rw'
+fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
+
 # Configuração da página
 st.set_page_config(page_title="Monitoramento de Rodovias", layout="wide")
 
