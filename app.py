@@ -1,10 +1,10 @@
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
 import geopandas as gpd
 import fiona
+import folium
+from streamlit_folium import st_folium
 
-# ADICIONE ISSO NO TOPO: Habilita suporte a KML explicitamente
+# ATENÇÃO: Isso habilita a leitura de arquivos KML
 fiona.drvsupport.supported_drivers['KML'] = 'rw'
 fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
 
